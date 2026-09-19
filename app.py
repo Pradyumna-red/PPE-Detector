@@ -1,69 +1,101 @@
-import streamlit as st
+import os
 import tempfile
+
 import cv2
-import numpy as np
+import streamlit as st
 from PIL import Image
 from ultralytics import YOLO
-import os
 
-# Load YOLOv8 model (custom)
+
+# -------------------------------------------------
+# Load YOLO Model
+# -------------------------------------------------
+
 @st.cache_resource
 def load_model():
-    model = YOLO(r"best.pt")
-    return model
+    return YOLO("best.pt")
 
+
+# -------------------------------------------------
+# Image Detection
+# -------------------------------------------------
 
 def detect_image(image, model, original_filename="detected_image"):
-    results = model(image)
+    results = model(image, conf=0.25)
+
     annotated_image = results[0].plot()
 
-    # Convert back to RGB before saving to match original image colors
-    annotated_image = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+    # Convert BGR -> RGB for Streamlit display
+    annotated_image = cv2.cvtColor(
+        annotated_image,
+        cv2.COLOR_BGR2RGB
+    )
 
-    # Ensure output directory exists
+    # Create output directory
     os.makedirs("output", exist_ok=True)
 
-    # Save image to output folder
-    output_path = os.path.join("output", f"{original_filename}_detected.jpg")
+    # Output filename
+    output_path = os.path.join(
+        "output",
+        f"{original_filename}_detected.jpg"
+    )
+
+    # Save image
     cv2.imwrite(
         output_path,
-        cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR)
+        cv2.cvtColor(
+            annotated_image,
+            cv2.COLOR_RGB2BGR
+        )
     )
 
     return annotated_image, results[0], output_path
 
 
+# -------------------------------------------------
+# Video Detection
+# -------------------------------------------------
+
 def detect_video(video_path, model):
+
     cap = cv2.VideoCapture(video_path)
+
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # Ensure output directory exists
+    # Create output directory
     os.makedirs("output", exist_ok=True)
 
-    # Set output filename based on input name
-    base_name = os.path.basename(video_path).split('.')[0]
+    # Output filename
+    base_name = os.path.splitext(
+        os.path.basename(video_path)
+    )[0]
+
     output_path = os.path.join(
         "output",
         f"{base_name}_detected.mp4"
     )
 
+    # Video writer
     out = cv2.VideoWriter(
         output_path,
-        cv2.VideoWriter_fourcc(*'mp4v'),
+        cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (width, height)
     )
 
     while cap.isOpened():
+
         ret, frame = cap.read()
 
         if not ret:
             break
 
-        results = model(frame)
+        results = model(frame, conf=0.25)
+
         annotated_frame = results[0].plot()
+
         out.write(annotated_frame)
 
     cap.release()
@@ -72,17 +104,30 @@ def detect_video(video_path, model):
     return output_path
 
 
+# -------------------------------------------------
 # Streamlit UI
+# -------------------------------------------------
+
 st.title("Personal Protective Equipment (PPE) Detection")
 
 st.sidebar.header("Choose Input Type")
+
 input_type = st.sidebar.radio(
     "Select input type",
     ["Image", "Video"]
 )
 
+
+# -------------------------------------------------
+# Load Model
+# -------------------------------------------------
+
 model = load_model()
 
+
+# =================================================
+# IMAGE MODE
+# =================================================
 
 if input_type == "Image":
 
@@ -93,17 +138,23 @@ if input_type == "Image":
 
     if uploaded_image:
 
+        # Read image
         image = Image.open(uploaded_image)
+
+        # Original image
+        st.subheader("Original Image")
 
         st.image(
             image,
-            caption="Original Image",
-            use_column_width=True
+            width="stretch"
         )
 
-        st.subheader("Detection Results:")
+        # Detection
+        st.subheader("Detection Results")
 
-        filename = os.path.splitext(uploaded_image.name)[0]
+        filename = os.path.splitext(
+            uploaded_image.name
+        )[0]
 
         annotated_image, results, image_output_path = detect_image(
             image,
@@ -111,14 +162,15 @@ if input_type == "Image":
             original_filename=filename
         )
 
+        # Detected image
         st.image(
             annotated_image,
             caption="Detected Image",
-            use_column_width=True
+            width="stretch"
         )
 
         # -------------------------------------------------
-        # Detection Results Table
+        # Detection Table
         # -------------------------------------------------
 
         st.subheader("Detected PPE Objects")
@@ -127,14 +179,26 @@ if input_type == "Image":
 
         if boxes is not None and len(boxes) > 0:
 
-            class_ids = boxes.cls.cpu().numpy().astype(int)
-            confidences = boxes.conf.cpu().numpy()
+            class_ids = (
+                boxes.cls
+                .cpu()
+                .numpy()
+                .astype(int)
+            )
+
+            confidences = (
+                boxes.conf
+                .cpu()
+                .numpy()
+            )
 
             detection_data = []
 
-            for class_id, confidence in zip(class_ids, confidences):
+            for class_id, confidence in zip(
+                class_ids,
+                confidences
+            ):
 
-                # Get actual class name from YOLO model
                 class_name = model.names[class_id]
 
                 detection_data.append({
@@ -149,17 +213,30 @@ if input_type == "Image":
             )
 
         else:
-            st.info("No PPE objects detected in this image.")
 
-        # Download detected image
-        with open(image_output_path, "rb") as f:
-
-            st.download_button(
-                "Download Detected Image",
-                f,
-                file_name=os.path.basename(image_output_path)
+            st.info(
+                "No PPE objects detected in this image."
             )
 
+        # -------------------------------------------------
+        # Download
+        # -------------------------------------------------
+
+        with open(image_output_path, "rb") as file:
+
+            st.download_button(
+                label="Download Detected Image",
+                data=file,
+                file_name=os.path.basename(
+                    image_output_path
+                ),
+                mime="image/jpeg"
+            )
+
+
+# =================================================
+# VIDEO MODE
+# =================================================
 
 elif input_type == "Video":
 
@@ -170,13 +247,27 @@ elif input_type == "Video":
 
     if uploaded_video:
 
+        # Show original video
+        st.subheader("Original Video")
+
         st.video(uploaded_video)
 
-        with st.spinner("Running object detection on video..."):
+        # Process video
+        with st.spinner(
+            "Running object detection on video..."
+        ):
 
-            with tempfile.NamedTemporaryFile(delete=False) as temp_input:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=os.path.splitext(
+                    uploaded_video.name
+                )[1]
+            ) as temp_input:
 
-                temp_input.write(uploaded_video.read())
+                temp_input.write(
+                    uploaded_video.read()
+                )
+
                 video_path = temp_input.name
 
             output_video_path = detect_video(
@@ -184,14 +275,30 @@ elif input_type == "Video":
                 model
             )
 
-            with open(output_video_path, "rb") as f:
+        # Delete temporary input file
+        try:
+            os.remove(video_path)
+        except OSError:
+            pass
 
-                st.download_button(
-                    "Download Processed Video",
-                    f,
-                    file_name=os.path.basename(output_video_path)
-                )
+        # Success message
+        st.success(
+            "Detection completed successfully!"
+        )
 
-        st.success("Done! Here's the processed video:")
+        # Processed video
+        st.subheader("Detected Video")
 
         st.video(output_video_path)
+
+        # Download
+        with open(output_video_path, "rb") as file:
+
+            st.download_button(
+                label="Download Processed Video",
+                data=file,
+                file_name=os.path.basename(
+                    output_video_path
+                ),
+                mime="video/mp4"
+            )
